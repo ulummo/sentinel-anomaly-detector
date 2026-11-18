@@ -54,7 +54,7 @@ Keep the bootstrap secret offline and remove it from the running environment aft
 
 The first owner signs in through **Device Management** with their email and password. Passwords are stored as salted PBKDF2-HMAC-SHA256 hashes; opaque bearer sessions are stored as SHA-256 hashes and expire after 12 hours.
 
-The owner can create operators with `POST /v1/operators` using an owner session:
+The owner can create operators with `POST /v1/operators` using an owner session, list them with `GET /v1/operators`, and disable an operator with `DELETE /v1/operators/{operator_id}`. Disabling an account revokes all of its active sessions:
 
 ```powershell
 $loginBody = @{ email = "owner@acme.example"; password = "your-owner-password" } | ConvertTo-Json
@@ -89,7 +89,7 @@ The sensor sends authenticated heartbeat messages and event batches. Revoking a 
 
 - `POST /v1/auth/bootstrap` — one-time first-owner creation; requires `X-Sentinel-Bootstrap`.
 - `POST /v1/auth/login`, `POST /v1/auth/logout`, `GET /v1/me` — operator sessions.
-- `POST /v1/operators` — owner-only operator creation.
+- `POST /v1/operators`, `GET /v1/operators`, `DELETE /v1/operators/{operator_id}` — owner-only operator administration; disabling an operator revokes all sessions.
 - `POST /v1/devices`, `GET /v1/devices`, `DELETE /v1/devices/{device_id}` — tenant-scoped endpoint administration.
 - `GET /v1/overview`, `GET /v1/audit` — tenant-scoped fleet and audit data.
 - `POST /v1/events`, `POST /v1/heartbeat` — device-token authenticated endpoint ingestion.

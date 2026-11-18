@@ -1,9 +1,4 @@
-"""Windows endpoint sensor for Sentinel.
-
-Collects metadata about TCP connections visible to this Windows host.
-It does NOT capture packet contents or observe other devices on the LAN.
-Run as Administrator for the broadest socket visibility.
-"""
+"""Windows endpoint sensor: collects TCP socket metadata for this host only."""
 from __future__ import annotations
 
 import argparse
@@ -20,15 +15,12 @@ from urllib.parse import urlparse
 
 import psutil
 
-FIELDS = [
-    "timestamp", "src_ip", "dst_ip", "src_port", "dst_port",
-    "protocol", "duration", "status", "pid", "process",
-]
+FIELDS = ["timestamp", "src_ip", "dst_ip", "src_port", "dst_port", "protocol",
+          "duration", "status", "pid", "process"]
 MAX_BATCH_SIZE = 500
 
 
 def validate_server_url(server_url: str) -> str:
-    """Require HTTPS except for loopback development servers."""
     parsed = urlparse(server_url)
     if parsed.scheme != "https" and not (
         parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
@@ -40,21 +32,11 @@ def validate_server_url(server_url: str) -> str:
 
 
 def send_batch(endpoint: str, token: str, events: list[dict]) -> None:
-    """Send observations in bounded batches; never print or persist the token."""
     for offset in range(0, len(events), MAX_BATCH_SIZE):
-        payload = json.dumps({
-            "schema_version": "1.0",
-            "events": events[offset:offset + MAX_BATCH_SIZE],
-        }).encode("utf-8")
-        request = urllib.request.Request(
-            endpoint,
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
+        payload = json.dumps({"schema_version": "1.0", "events": events[offset:offset + MAX_BATCH_SIZE]}).encode()
+        request = urllib.request.Request(endpoint, data=payload, headers={
+            "Authorization": f"Bearer {token}", "Content-Type": "application/json"
+        }, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 result = json.loads(response.read().decode("utf-8"))
@@ -73,16 +55,12 @@ def collect(output: Path, interval: float, seconds: int,
     new_file = not output.exists() or output.stat().st_size == 0
     output.parent.mkdir(parents=True, exist_ok=True)
     endpoint = validate_server_url(server_url) if server_url else None
-
     with output.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
         if new_file:
             writer.writeheader()
-
         print(f"Sentinel Sensor running. Writing connection metadata to: {output}")
         print("Only this Windows computer is monitored; no packet payloads are collected.")
-        if endpoint:
-            print(f"Central ingestion enabled: {server_url}")
         try:
             while seconds <= 0 or time.monotonic() - started < seconds:
                 now = time.monotonic()
@@ -92,12 +70,9 @@ def collect(output: Path, interval: float, seconds: int,
                     print(f"Cannot enumerate sockets: {exc}. Try running as Administrator.")
                     time.sleep(interval)
                     continue
-
-                observations: list[dict] = []
+                observations = []
                 for conn in connections:
-                    if not conn.laddr or not conn.raddr:
-                        continue
-                    if conn.type != socket.SOCK_STREAM:
+                    if not conn.laddr or not conn.raddr or conn.type != socket.SOCK_STREAM:
                         continue
                     local_ip, local_port = conn.laddr.ip, conn.laddr.port
                     remote_ip, remote_port = conn.raddr.ip, conn.raddr.port
@@ -110,23 +85,16 @@ def collect(output: Path, interval: float, seconds: int,
                         process = ""
                     observation = {
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "src_ip": local_ip,
-                        "dst_ip": remote_ip,
-                        "src_port": local_port,
-                        "dst_port": remote_port,
-                        "protocol": "TCP",
-                        "duration": round(now - first_seen[key], 3),
-                        "status": conn.status or "",
-                        "pid": conn.pid or "",
-                        "process": process,
+                        "src_ip": local_ip, "dst_ip": remote_ip,
+                        "src_port": local_port, "dst_port": remote_port,
+                        "protocol": "TCP", "duration": round(now - first_seen[key], 3),
+                        "status": conn.status or "", "pid": conn.pid or "", "process": process,
                     }
                     writer.writerow(observation)
                     observations.append(observation)
                 handle.flush()
-
                 if endpoint and observations:
                     send_batch(endpoint, token or "", observations)
-
                 print(f"Observed {len(known)} unique TCP connections so far.")
                 time.sleep(interval)
         except KeyboardInterrupt:
@@ -138,25 +106,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Sentinel Windows endpoint connection sensor")
     parser.add_argument("--output", default="sentinel_endpoint_flows.csv")
     parser.add_argument("--interval", type=float, default=10.0)
-    parser.add_argument("--seconds", type=int, default=300,
-                        help="Collection duration; 0 runs until Ctrl+C (default: 300)")
-    parser.add_argument("--server-url", default=None,
-                        help="Optional Sentinel API base URL (HTTPS required except localhost)")
+    parser.add_argument("--seconds", type=int, default=300, help="Duration; 0 runs until Ctrl+C")
+    parser.add_argument("--server-url", default=None, help="Optional Sentinel API base URL")
     args = parser.parse_args()
     if args.interval < 1:
         parser.error("--interval must be at least 1 second")
     if args.seconds < 0:
         parser.error("--seconds cannot be negative")
-
-    token = os.getenv("SENTINEL_INGEST_TOKEN")
+    token = os.getenv("SENTINEL_DEVICE_TOKEN")
     if args.server_url and (not token or len(token) < 32):
-        parser.error("Set SENTINEL_INGEST_TOKEN to a secret of at least 32 characters.")
+        parser.error("Set SENTINEL_DEVICE_TOKEN to the per-device token issued by the Sentinel administrator.")
     try:
         if args.server_url:
             validate_server_url(args.server_url)
     except ValueError as exc:
         parser.error(str(exc))
-
     collect(Path(args.output), args.interval, args.seconds, args.server_url, token)
 
 

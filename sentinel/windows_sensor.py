@@ -18,7 +18,7 @@ import psutil
 
 FIELDS = [
     "timestamp", "src_ip", "dst_ip", "src_port", "dst_port",
-    "protocol", "duration", "bytes", "packets", "status", "pid", "process",
+    "protocol", "duration", "status", "pid", "process",
 ]
 
 
@@ -68,8 +68,6 @@ def collect(output: Path, interval: float, seconds: int) -> None:
                         "dst_port": remote_port,
                         "protocol": "TCP",
                         "duration": round(now - first_seen[key], 3),
-                        "bytes": 0,
-                        "packets": 0,
                         "status": conn.status or "",
                         "pid": conn.pid or "",
                         "process": process,

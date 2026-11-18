@@ -101,4 +101,15 @@ Authenticated ingestion endpoint: `POST http://127.0.0.1:8000/v1/events`
 
 Request body uses schema version `1.0` and an `events` array containing the endpoint fields documented in [the event schema](docs/ENDPOINT_EVENT_SCHEMA_V1.md). Supply the token as an HTTP header: `Authorization: Bearer <token>`.
 
-The API currently stores accepted observations in `sentinel_events.sqlite3` (override with `SENTINEL_DB_PATH`). The existing Windows sensor still writes CSV; sending events directly from the sensor is a follow-up integration task.
+The API stores accepted observations in `sentinel_events.sqlite3` (override with `SENTINEL_DB_PATH`). The Windows sensor can now both retain its local CSV and optionally forward observations to this API.
+
+In a second PowerShell window on the same computer, set the same token and run:
+
+```powershell
+$env:SENTINEL_INGEST_TOKEN = "the-same-random-secret"
+python -m sentinel.windows_sensor --output sentinel_endpoint_flows.csv --interval 10 --seconds 300 --server-url http://127.0.0.1:8000
+```
+
+For a separate server, use its HTTPS URL (for example, `https://sentinel.example.com`) behind a properly configured TLS reverse proxy. The API's development command binds to loopback only; do not bind it to a public interface or expose it directly to the internet. Keep the local CSV as a fallback: failed API requests are reported and do not stop local collection.
+
+**Current limitation:** the API still uses one shared bearer token, not per-device enrollment. This is suitable only for a controlled development test on a trusted machine/network. Before any customer pilot, implement per-device credentials and revocation, tenant isolation, HTTPS deployment, rate limiting, retention controls, and a security review.

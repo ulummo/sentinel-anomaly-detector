@@ -31,20 +31,37 @@ def validate_server_url(server_url: str) -> str:
     return server_url.rstrip("/") + "/v1/events"
 
 
+def _post_json(url: str, token: str, payload: dict, timeout: int = 10) -> dict:
+    request = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={
+        "Authorization": f"Bearer {token}", "Content-Type": "application/json"
+    }, method="POST")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def send_batch(endpoint: str, token: str, events: list[dict]) -> None:
     for offset in range(0, len(events), MAX_BATCH_SIZE):
-        payload = json.dumps({"schema_version": "1.0", "events": events[offset:offset + MAX_BATCH_SIZE]}).encode()
-        request = urllib.request.Request(endpoint, data=payload, headers={
-            "Authorization": f"Bearer {token}", "Content-Type": "application/json"
-        }, method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                result = json.loads(response.read().decode("utf-8"))
-                print(f"Central API accepted {result.get('accepted', 0)} observation(s).")
+            result = _post_json(endpoint, token, {
+                "schema_version": "1.0", "events": events[offset:offset + MAX_BATCH_SIZE]
+            })
+            print(f"Central API accepted {result.get('accepted', 0)} observation(s).")
         except urllib.error.HTTPError as exc:
             print(f"Central API rejected batch (HTTP {exc.code}); local CSV is retained.")
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             print(f"Central API unavailable ({exc}); local CSV is retained.")
+
+
+def send_heartbeat(server_url: str, token: str) -> None:
+    """Send liveness independently of whether this endpoint has open TCP sockets."""
+    heartbeat_url = server_url.rstrip("/") + "/v1/heartbeat"
+    try:
+        result = _post_json(heartbeat_url, token, {})
+        print(f"Central API heartbeat: {result.get('status', 'ok')}.")
+    except urllib.error.HTTPError as exc:
+        print(f"Central API heartbeat rejected (HTTP {exc.code}).")
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        print(f"Central API heartbeat unavailable ({exc}).")
 
 
 def collect(output: Path, interval: float, seconds: int,
@@ -64,6 +81,8 @@ def collect(output: Path, interval: float, seconds: int,
         try:
             while seconds <= 0 or time.monotonic() - started < seconds:
                 now = time.monotonic()
+                if server_url and token:
+                    send_heartbeat(server_url, token)
                 try:
                     connections = psutil.net_connections(kind="inet")
                 except (psutil.AccessDenied, OSError) as exc:

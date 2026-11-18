@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sentinel.schema import ENDPOINT_SCHEMA_VERSION, validate_endpoint_frame
 
 DATABASE_PATH = Path(os.getenv("SENTINEL_DB_PATH", "sentinel_events.sqlite3"))
-app = FastAPI(title="Sentinel Ingestion API", version="0.2.0")
+app = FastAPI(title="Sentinel Ingestion API", version="0.3.0")
 
 
 class EventBatch(BaseModel):
@@ -42,7 +42,8 @@ def _connect() -> sqlite3.Connection:
             name TEXT NOT NULL,
             token_hash TEXT NOT NULL UNIQUE,
             created_at TEXT NOT NULL,
-            revoked_at TEXT
+            revoked_at TEXT,
+            last_seen TEXT
         )
     """)
     connection.execute("""
@@ -64,13 +65,17 @@ def _connect() -> sqlite3.Connection:
             tenant_id TEXT
         )
     """)
-    # Upgrade databases created by the shared-token prototype in place.
-    columns = {row["name"] for row in connection.execute("PRAGMA table_info(endpoint_events)")}
-    if "device_id" not in columns:
+    # Upgrade databases created by earlier prototypes in place.
+    device_columns = {row["name"] for row in connection.execute("PRAGMA table_info(devices)")}
+    if "last_seen" not in device_columns:
+        connection.execute("ALTER TABLE devices ADD COLUMN last_seen TEXT")
+    event_columns = {row["name"] for row in connection.execute("PRAGMA table_info(endpoint_events)")}
+    if "device_id" not in event_columns:
         connection.execute("ALTER TABLE endpoint_events ADD COLUMN device_id TEXT")
-    if "tenant_id" not in columns:
+    if "tenant_id" not in event_columns:
         connection.execute("ALTER TABLE endpoint_events ADD COLUMN tenant_id TEXT")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_events_tenant_device ON endpoint_events(tenant_id, device_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_events_received_at ON endpoint_events(received_at)")
     return connection
 
 
@@ -124,13 +129,26 @@ def create_device(request: DeviceCreate) -> dict[str, str]:
     return {"device_id": device_id, "tenant_id": request.tenant_id, "name": request.name.strip(), "device_token": token}
 
 
+@app.post("/v1/heartbeat")
+def heartbeat(device: dict[str, str] = Depends(require_device)) -> dict[str, str]:
+    """Record authenticated endpoint liveness even when no TCP sockets are present."""
+    seen_at = datetime.now(timezone.utc).isoformat()
+    with _connect() as connection:
+        connection.execute(
+            "UPDATE devices SET last_seen = ? WHERE device_id = ? AND revoked_at IS NULL",
+            (seen_at, device["device_id"]),
+        )
+    return {"status": "ok", "device_id": device["device_id"], "last_seen": seen_at}
+
+
 @app.get("/v1/devices", dependencies=[Depends(require_admin)])
 def list_devices() -> dict[str, Any]:
-    """List registered devices and their latest server-received event time."""
+    """List registered devices and their latest authenticated check-in."""
     with _connect() as connection:
         rows = connection.execute("""
             SELECT d.device_id, d.tenant_id, d.name, d.created_at, d.revoked_at,
-                   COUNT(e.id) AS event_count, MAX(e.received_at) AS last_seen
+                   COUNT(e.id) AS event_count,
+                   MAX(COALESCE(d.last_seen, e.received_at)) AS last_seen
             FROM devices AS d
             LEFT JOIN endpoint_events AS e ON e.device_id = d.device_id
             GROUP BY d.device_id
@@ -217,5 +235,6 @@ def ingest_events(batch: EventBatch, device: dict[str, str] = Depends(require_de
              dst_port, protocol, duration, status, pid, process, device_id, tenant_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, rows)
+        connection.execute("UPDATE devices SET last_seen = ? WHERE device_id = ?", (received_at, device["device_id"]))
     return {"accepted": len(rows), "rejected": 0, "schema_version": batch.schema_version,
             "device_id": device["device_id"]}

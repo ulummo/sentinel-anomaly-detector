@@ -143,3 +143,30 @@ def test_request_body_limit_rejects_oversized_content_length(client):
     response=client.post("/v1/auth/login",headers={"Content-Length":str(api.MAX_REQUEST_BYTES+1)},
                          content=b'{}')
     assert response.status_code==413
+
+
+def test_owner_can_disable_operator_and_revoke_all_sessions(client):
+    owner=login(client)
+    created=client.post("/v1/operators",headers=owner,json={
+        "email":"contractor@acme.test","password":"contractor-password-long","role":"analyst"})
+    operator_id=created.json()["operator_id"]
+    contractor=login(client,"contractor@acme.test","contractor-password-long")
+    assert client.get("/v1/operators",headers=owner).status_code==200
+    disabled=client.delete("/v1/operators/"+operator_id,headers=owner)
+    assert disabled.status_code==200
+    assert client.get("/v1/me",headers=contractor).status_code==401
+
+def test_owner_cannot_disable_self_or_other_tenant_operator(client):
+    owner=login(client)
+    owner_id=client.get("/v1/me",headers=owner).json()["operator_id"]
+    assert client.delete("/v1/operators/"+owner_id,headers=owner).status_code==409
+    with sqlite3.connect(api.DATABASE_PATH) as c:
+        c.execute("INSERT INTO operators VALUES(?,?,?,?,?,?,NULL)",
+                  ("foreign-operator","other","foreign@other.test",api.hash_password("foreign-password-long"),"analyst",api._now()))
+    assert client.delete("/v1/operators/foreign-operator",headers=owner).status_code==404
+
+def test_successful_login_clears_prior_failed_attempts(client):
+    client.post("/v1/auth/login",json={"email":"owner@acme.test","password":"wrong-password"})
+    assert client.post("/v1/auth/login",json={"email":"owner@acme.test","password":"correct-horse-battery"}).status_code==200
+    with sqlite3.connect(api.DATABASE_PATH) as c:
+        assert c.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0]==0

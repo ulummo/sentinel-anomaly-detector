@@ -74,6 +74,6 @@ python -m sentinel.windows_sensor --output sentinel_endpoint_flows.csv --interva
 
 The sensor records observations for five minutes by default. Use `--seconds 0` to run until Ctrl+C. When it finishes, open Sentinel, choose **Upload CSV**, and upload `sentinel_endpoint_flows.csv`.
 
-**Important scope limitation:** on a typical home Wi-Fi network, a computer cannot passively see all other devices' unicast traffic. Network-wide monitoring requires a supported router/firewall export, a managed switch with port mirroring, or a sensor deployed on each device. This endpoint sensor is a safe first step and must not be described as whole-LAN visibility. The exported `bytes` and `packets` fields are zero placeholders because this sensor enumerates sockets rather than capturing packets; do not interpret them as measured traffic volume.
+**Important scope limitation:** on a typical home Wi-Fi network, a computer cannot passively see all other devices' unicast traffic. Network-wide monitoring requires a supported router/firewall export, a managed switch with port mirroring, or a sensor deployed on each device. This endpoint sensor is a safe first step and must not be described as whole-LAN visibility. This sensor enumerates sockets rather than capturing packets, so it does not provide per-flow byte or packet counters.
 
 Only monitor devices and networks you own or are authorized to administer.

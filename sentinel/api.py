@@ -187,6 +187,7 @@ def login(request: LoginRequest, http_request: Request):
                 VALUES(?,?,?,?,?) ON CONFLICT(email,client_ip) DO UPDATE SET
                 window_started=excluded.window_started,attempts=excluded.attempts,blocked_until=excluded.blocked_until""",
                 (email,client_ip,window_start.isoformat(),attempts,blocked))
+            c.commit()
             if blocked:
                 raise HTTPException(status_code=429,detail="Too many login attempts. Try again later.")
             raise HTTPException(status_code=401,detail="Invalid email or password.")

@@ -1,8 +1,11 @@
 """Tenant-scoped Sentinel API with individual operator accounts and per-device credentials."""
 from __future__ import annotations
 import hashlib, hmac, os, secrets, sqlite3, uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from contextlib import contextmanager
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from typing import Any
 import pandas as pd
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -12,6 +15,11 @@ from sentinel.operator_auth import hash_password, verify_password, new_session, 
 
 DATABASE_PATH = Path(os.getenv("SENTINEL_DB_PATH", "sentinel_events.sqlite3"))
 app = FastAPI(title="Sentinel API", version="0.4.0")
+MAX_REQUEST_BYTES = 1_048_576
+LOGIN_WINDOW = timedelta(minutes=15)
+LOGIN_LOCKOUT = timedelta(minutes=15)
+LOGIN_MAX_ATTEMPTS = 8
+DUMMY_PASSWORD_HASH = hash_password("sentinel-dummy-password-never-used")
 
 class EventBatch(BaseModel):
     schema_version: str = ENDPOINT_SCHEMA_VERSION
@@ -32,7 +40,9 @@ class OperatorCreate(BaseModel):
 
 def _connect() -> sqlite3.Connection:
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(DATABASE_PATH); c.row_factory = sqlite3.Row
+    c = sqlite3.connect(DATABASE_PATH, timeout=10); c.row_factory = sqlite3.Row
+    c.execute('PRAGMA foreign_keys=ON')
+    c.execute('PRAGMA busy_timeout=10000')
     c.execute("""CREATE TABLE IF NOT EXISTS devices (
         device_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL,
         token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, revoked_at TEXT, last_seen TEXT)""")
@@ -48,6 +58,9 @@ def _connect() -> sqlite3.Connection:
     c.execute("""CREATE TABLE IF NOT EXISTS operator_sessions (
         token_hash TEXT PRIMARY KEY, operator_id TEXT NOT NULL, created_at TEXT NOT NULL,
         expires_at TEXT NOT NULL, revoked_at TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS login_attempts (
+        email TEXT NOT NULL, client_ip TEXT NOT NULL, window_started TEXT NOT NULL,
+        attempts INTEGER NOT NULL, blocked_until TEXT, PRIMARY KEY(email,client_ip))""")
     c.execute("""CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, actor_id TEXT NOT NULL,
         action TEXT NOT NULL, target_id TEXT, created_at TEXT NOT NULL)""")
@@ -59,7 +72,31 @@ def _connect() -> sqlite3.Connection:
     c.execute("CREATE INDEX IF NOT EXISTS idx_events_tenant_device ON endpoint_events(tenant_id,device_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_events_received_at ON endpoint_events(received_at)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sessions_operator ON operator_sessions(operator_id)")
+    c.commit()
     return c
+
+@contextmanager
+def _db():
+    connection = _connect()
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+@app.middleware("http")
+async def enforce_request_size(request: Request, call_next):
+    raw_length = request.headers.get("content-length")
+    if raw_length:
+        try:
+            if int(raw_length) > MAX_REQUEST_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "Request body exceeds 1 MiB limit."})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
+    return await call_next(request)
 
 def _now() -> str: return datetime.now(timezone.utc).isoformat()
 def _audit(c: sqlite3.Connection, actor: dict[str,str], action: str, target: str | None = None) -> None:
@@ -67,11 +104,12 @@ def _audit(c: sqlite3.Connection, actor: dict[str,str], action: str, target: str
               (actor["tenant_id"], actor["operator_id"], action, target, _now()))
 
 def require_operator(authorization: str | None = Header(default=None)) -> dict[str,str]:
-    scheme, _, token = (authorization or "").partition(" ")
+    parts=(authorization or "").split()
+    scheme, token = (parts[0],parts[1]) if len(parts)==2 else ("","")
     if scheme.lower() != "bearer" or len(token) < 32:
         raise HTTPException(status_code=401, detail="Operator login required.")
     digest = hashlib.sha256(token.encode()).hexdigest()
-    with _connect() as c:
+    with _db() as c:
         row = c.execute("""SELECT o.operator_id,o.tenant_id,o.email,o.role
             FROM operator_sessions s JOIN operators o ON o.operator_id=s.operator_id
             WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND o.disabled_at IS NULL""",
@@ -117,12 +155,42 @@ def bootstrap(request: BootstrapRequest, x_sentinel_bootstrap: str | None = Head
     return {"status":"created","tenant_id":request.tenant_id,"email":email,"role":"owner"}
 
 @app.post("/v1/auth/login")
-def login(request: LoginRequest):
+def login(request: LoginRequest, http_request: Request):
     email=request.email.strip().lower()
-    with _connect() as c:
+    client_ip=http_request.client.host if http_request.client else "unknown"
+    now=datetime.now(timezone.utc)
+    with _db() as c:
+        throttle=c.execute("SELECT window_started,attempts,blocked_until FROM login_attempts WHERE email=? AND client_ip=?",(email,client_ip)).fetchone()
+        if throttle and throttle["blocked_until"]:
+            try:
+                if datetime.fromisoformat(throttle["blocked_until"]) > now:
+                    raise HTTPException(status_code=429,detail="Too many login attempts. Try again later.")
+            except ValueError:
+                pass
         rows=c.execute("SELECT operator_id,tenant_id,email,password_hash,role FROM operators WHERE email=? AND disabled_at IS NULL",(email,)).fetchall()
         match=next((r for r in rows if verify_password(request.password,r["password_hash"])),None)
-        if match is None: raise HTTPException(status_code=401,detail="Invalid email or password.")
+        if not rows:
+            verify_password(request.password,DUMMY_PASSWORD_HASH)
+        if match is None:
+            window_start=now
+            attempts=1
+            if throttle:
+                try:
+                    previous=datetime.fromisoformat(throttle["window_started"])
+                    if now-previous < LOGIN_WINDOW:
+                        window_start=previous
+                        attempts=int(throttle["attempts"])+1
+                except (ValueError,TypeError):
+                    pass
+            blocked=(now+LOGIN_LOCKOUT).isoformat() if attempts>=LOGIN_MAX_ATTEMPTS else None
+            c.execute("""INSERT INTO login_attempts(email,client_ip,window_started,attempts,blocked_until)
+                VALUES(?,?,?,?,?) ON CONFLICT(email,client_ip) DO UPDATE SET
+                window_started=excluded.window_started,attempts=excluded.attempts,blocked_until=excluded.blocked_until""",
+                (email,client_ip,window_start.isoformat(),attempts,blocked))
+            if blocked:
+                raise HTTPException(status_code=429,detail="Too many login attempts. Try again later.")
+            raise HTTPException(status_code=401,detail="Invalid email or password.")
+        c.execute("DELETE FROM login_attempts WHERE email=? AND client_ip=?",(email,client_ip))
         token,digest=new_session()
         c.execute("INSERT INTO operator_sessions VALUES(?,?,?,?,NULL)",(digest,match["operator_id"],_now(),session_expiry()))
         return {"access_token":token,"token_type":"bearer","expires_in":43200,
@@ -130,7 +198,7 @@ def login(request: LoginRequest):
 
 @app.post("/v1/auth/logout")
 def logout(operator: dict[str,str] = Depends(require_operator), authorization: str | None = Header(default=None)):
-    token=authorization.split(" ",1)[1]
+    token=authorization.split()[1]
     digest=hashlib.sha256(token.encode()).hexdigest()
     with _connect() as c: c.execute("UPDATE operator_sessions SET revoked_at=? WHERE token_hash=?",(_now(),digest))
     return {"status":"logged_out"}

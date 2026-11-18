@@ -43,7 +43,7 @@ uvicorn sentinel.api:app --host 127.0.0.1 --port 8000
 In a second PowerShell window, create the first organization owner. Bootstrap can succeed only once per database:
 
 ```powershell
-$bootstrap = $env:SENTINEL_BOOTSTRAP_TOKEN
+$bootstrap = "paste-the-same-bootstrap-secret-here"
 $body = @{ tenant_id = "acme"; email = "owner@acme.example"; password = "replace-with-a-unique-password-12chars-min" } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/auth/bootstrap" -Headers @{ "X-Sentinel-Bootstrap" = $bootstrap } -ContentType "application/json" -Body $body
 ```

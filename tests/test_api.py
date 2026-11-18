@@ -98,7 +98,6 @@ def test_invalid_optional_pid_is_rejected(client):
     assert response.status_code == 422
 
 
-
 def test_admin_can_view_device_inventory_and_last_seen(client):
     device = create_device(client, tenant="north")
     response = client.get("/v1/devices", headers={"Authorization": f"Bearer {ADMIN}"})
@@ -121,4 +120,27 @@ def test_fleet_overview_counts_devices_and_events(client):
 
 def test_device_inventory_requires_admin(client):
     response = client.get("/v1/devices")
+    assert response.status_code == 401
+
+
+def test_authenticated_heartbeat_updates_last_seen_without_events(client):
+    device = create_device(client)
+    response = client.post("/v1/heartbeat",
+                           headers={"Authorization": f"Bearer {device['device_token']}"},
+                           json={})
+    assert response.status_code == 200
+    assert response.json()["device_id"] == device["device_id"]
+    inventory = client.get("/v1/devices", headers={"Authorization": f"Bearer {ADMIN}"})
+    row = inventory.json()["devices"][0]
+    assert row["last_seen"] == response.json()["last_seen"]
+    assert row["event_count"] == 0
+
+
+def test_revoked_device_cannot_send_heartbeat(client):
+    device = create_device(client)
+    client.delete(f"/v1/devices/{device['device_id']}",
+                  headers={"Authorization": f"Bearer {ADMIN}"})
+    response = client.post("/v1/heartbeat",
+                           headers={"Authorization": f"Bearer {device['device_token']}"},
+                           json={})
     assert response.status_code == 401

@@ -4,10 +4,10 @@ This is a deployment template, not a live server. Use a dedicated Linux VM with 
 
 ## Configure
 
-1. Copy `.env.example` to `.env` in the repository root.
+1. Copy `deploy/.env.example` to `.env` in the repository root (the source file is inside `deploy/`).
 2. Set `SENTINEL_DOMAIN`, `ACME_EMAIL`, and a unique 64-character random `SENTINEL_BOOTSTRAP_TOKEN`. Keep `.env` private; it is gitignored.
 3. Start: `docker compose up -d --build`.
-4. Check: `docker compose ps` and `curl https://$SENTINEL_DOMAIN/health`.
+4. Check: `docker compose ps`, open `https://$SENTINEL_DOMAIN/` for the Streamlit dashboard, and check `https://$SENTINEL_DOMAIN/health` for the API.
 5. Bootstrap the first owner exactly once using `POST /v1/auth/bootstrap` with header `X-Sentinel-Bootstrap`. Use a unique 16+ character password. Then remove the bootstrap secret from the runtime environment and rotate/remove it from the deployment secret store.
 6. Enroll devices from the Streamlit console. Device sensors must use the HTTPS URL.
 

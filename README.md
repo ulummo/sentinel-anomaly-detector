@@ -17,7 +17,7 @@ python -m pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Choose **Generate demo traffic** or upload a supported CSV.
+Choose **Generate demo traffic** or upload a supported CSV. Streamlit automatically adds the **Device Management** page to the navigation menu when the app starts.
 
 ## Windows endpoint sensor
 
@@ -76,6 +76,16 @@ Invoke-RestMethod -Method Delete -Uri "http://127.0.0.1:8000/v1/devices/$($enrol
 ```
 
 A revoked credential can no longer submit observations. Enroll a replacement device credential if rotation is required.
+
+## Device Management page
+
+The Streamlit sidebar includes a **Device Management** page for administrators. Enter the API base URL and `SENTINEL_ADMIN_TOKEN` in the page sidebar to:
+- view fleet totals and enrolled endpoint inventory;
+- see per-device event counts and last server-received check-in;
+- enroll a workstation and copy its one-time device credential;
+- revoke a device credential after loss or suspected compromise.
+
+The page talks to the API; it does not deploy or start the API server. Start the API separately first. For remote use, configure HTTPS and protect the administrator token. The page does not persist the token in the application database.
 
 ## Data and security notes
 

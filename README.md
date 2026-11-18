@@ -60,3 +60,20 @@ sentinel-anomaly-detector/
 ## Responsible use
 
 Analyze only traffic data you are authorized to inspect. Do not upload sensitive captures or personal data to environments you do not control.
+
+## Windows endpoint sensor (first monitoring step)
+
+The repository includes an **experimental Windows endpoint sensor** that records TCP connection metadata visible to one Windows computer. It does not capture packet payloads, measure per-flow byte counts, or see traffic belonging only to other devices.
+
+Install dependencies and run PowerShell (Administrator is recommended):
+
+```powershell
+python -m pip install -r requirements.txt
+python -m sentinel.windows_sensor --output sentinel_endpoint_flows.csv --interval 10 --seconds 300
+```
+
+The sensor records observations for five minutes by default. Use `--seconds 0` to run until Ctrl+C. When it finishes, open Sentinel, choose **Upload CSV**, and upload `sentinel_endpoint_flows.csv`.
+
+**Important scope limitation:** on a typical home Wi-Fi network, a computer cannot passively see all other devices' unicast traffic. Network-wide monitoring requires a supported router/firewall export, a managed switch with port mirroring, or a sensor deployed on each device. This endpoint sensor is a safe first step and must not be described as whole-LAN visibility. The exported `bytes` and `packets` fields are zero placeholders because this sensor enumerates sockets rather than capturing packets; do not interpret them as measured traffic volume.
+
+Only monitor devices and networks you own or are authorized to administer.

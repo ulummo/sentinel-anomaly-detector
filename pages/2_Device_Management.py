@@ -83,7 +83,7 @@ cols=st.columns(4)
 for col,(label,value) in zip(cols,cards):
     with col: st.markdown(f'<div class="metric"><div class="metric-label">{label}</div><div class="metric-value">{value:,}</div></div>',unsafe_allow_html=True)
 
-enroll_tab,inventory_tab,audit_tab,guide_tab=st.tabs(["＋ Enroll device","▦ Inventory","◷ Audit log","ⓘ Setup"])
+enroll_tab,inventory_tab,audit_tab,operators_tab,guide_tab=st.tabs(["＋ Enroll device","▦ Inventory","◷ Audit log","♙ Operators","ⓘ Setup"])
 with enroll_tab:
     st.subheader("Register a Windows workstation")
     if operator.get("role") not in ("owner","admin"): st.info("Your role can view inventory but cannot enroll endpoints.")
@@ -124,6 +124,43 @@ with audit_tab:
             entries=api_request(base_url,token,"GET","/v1/audit")["entries"]
             st.dataframe(pd.DataFrame(entries),use_container_width=True,hide_index=True) if entries else st.info("No administrative actions recorded yet.")
         except (ValueError,RuntimeError) as exc: st.error(str(exc))
+
+with operators_tab:
+    st.subheader("Organization operators")
+    if operator.get("role") != "owner":
+        st.info("Only the organization owner can create or disable operator accounts.")
+    else:
+        with st.form("create_operator", clear_on_submit=True):
+            new_email=st.text_input("Work email", key="new_operator_email")
+            new_password=st.text_input("Temporary password (12+ characters)", type="password", key="new_operator_password")
+            new_role=st.selectbox("Role", ["admin","analyst","viewer"], format_func=lambda x: {"admin":"Administrator","analyst":"Security analyst","viewer":"Read only"}[x])
+            create_operator=st.form_submit_button("Create operator", type="primary")
+        if create_operator:
+            try:
+                result=api_request(base_url,token,"POST","/v1/operators",{"email":new_email.strip(),"password":new_password,"role":new_role})
+                st.success(f"Created {result['email']} ({result['role']}). Ask them to sign in with the temporary password.")
+            except (ValueError,RuntimeError) as exc:
+                st.error(str(exc))
+        st.divider()
+        try:
+            operator_rows=api_request(base_url,token,"GET","/v1/operators").get("operators",[])
+            if operator_rows:
+                st.dataframe(pd.DataFrame(operator_rows),use_container_width=True,hide_index=True)
+                active_ops=[x for x in operator_rows if not x.get("disabled_at") and x["operator_id"] != operator.get("operator_id")]
+                if active_ops:
+                    op_choices={f"{x['email']} · {x['role']}":x["operator_id"] for x in active_ops}
+                    selected_op=st.selectbox("Account to disable",list(op_choices),key="disable_operator_choice")
+                    confirm_op=st.checkbox("I confirm that this account must lose access immediately.",key="confirm_disable_operator")
+                    if st.button("Disable operator",disabled=not confirm_op):
+                        try:
+                            api_request(base_url,token,"DELETE","/v1/operators/"+op_choices[selected_op])
+                            st.success("Account disabled and active sessions revoked."); st.rerun()
+                        except (ValueError,RuntimeError) as exc: st.error(str(exc))
+            else:
+                st.info("No operator accounts found.")
+        except (ValueError,RuntimeError) as exc:
+            st.error(str(exc))
+
 with guide_tab:
     st.markdown("""
 **First-time setup (server operator):**

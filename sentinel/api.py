@@ -131,7 +131,7 @@ def require_device(authorization: str | None = Header(default=None)) -> dict[str
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() != "bearer" or len(token) < 32: raise HTTPException(status_code=401, detail="Invalid device credential.")
     digest = hashlib.sha256(token.encode()).hexdigest()
-    with _connect() as c:
+    with _db() as c:
         row = c.execute("SELECT device_id,tenant_id,name FROM devices WHERE token_hash=? AND revoked_at IS NULL",(digest,)).fetchone()
     if row is None: raise HTTPException(status_code=401, detail="Invalid or revoked device credential.")
     return dict(row)
@@ -147,7 +147,7 @@ def bootstrap(request: BootstrapRequest, x_sentinel_bootstrap: str | None = Head
         raise HTTPException(status_code=401,detail="Invalid bootstrap credential.")
     email=request.email.strip().lower()
     if "@" not in email: raise HTTPException(status_code=422,detail="A valid email address is required.")
-    with _connect() as c:
+    with _db() as c:
         if c.execute("SELECT 1 FROM operators LIMIT 1").fetchone():
             raise HTTPException(status_code=409,detail="Bootstrap is already complete.")
         c.execute("INSERT INTO operators VALUES(?,?,?,?,?,?,NULL)",
@@ -201,14 +201,14 @@ def login(request: LoginRequest, http_request: Request):
 def logout(operator: dict[str,str] = Depends(require_operator), authorization: str | None = Header(default=None)):
     token=authorization.split()[1]
     digest=hashlib.sha256(token.encode()).hexdigest()
-    with _connect() as c: c.execute("UPDATE operator_sessions SET revoked_at=? WHERE token_hash=?",(_now(),digest))
+    with _db() as c: c.execute("UPDATE operator_sessions SET revoked_at=? WHERE token_hash=?",(_now(),digest))
     return {"status":"logged_out"}
 
 @app.post("/v1/operators")
 def create_operator(request: OperatorCreate, owner: dict[str,str] = Depends(require_owner)):
     email=request.email.strip().lower()
     if "@" not in email: raise HTTPException(status_code=422,detail="A valid email address is required.")
-    with _connect() as c:
+    with _db() as c:
         try:
             operator_id=str(uuid.uuid4())
             c.execute("INSERT INTO operators VALUES(?,?,?,?,?,?,NULL)",
@@ -223,7 +223,7 @@ def me(operator: dict[str,str] = Depends(require_operator)): return operator
 @app.post("/v1/devices")
 def create_device(request: DeviceCreate, operator: dict[str,str] = Depends(require_admin)):
     device_id=str(uuid.uuid4()); token=secrets.token_urlsafe(32); digest=hashlib.sha256(token.encode()).hexdigest()
-    with _connect() as c:
+    with _db() as c:
         c.execute("INSERT INTO devices(device_id,tenant_id,name,token_hash,created_at) VALUES(?,?,?,?,?)",
                   (device_id,operator["tenant_id"],request.name.strip(),digest,_now()))
         _audit(c,operator,"device.enrolled",device_id)
@@ -232,12 +232,12 @@ def create_device(request: DeviceCreate, operator: dict[str,str] = Depends(requi
 @app.post("/v1/heartbeat")
 def heartbeat(device: dict[str,str] = Depends(require_device)):
     seen=_now()
-    with _connect() as c: c.execute("UPDATE devices SET last_seen=? WHERE device_id=? AND revoked_at IS NULL",(seen,device["device_id"]))
+    with _db() as c: c.execute("UPDATE devices SET last_seen=? WHERE device_id=? AND revoked_at IS NULL",(seen,device["device_id"]))
     return {"status":"ok","device_id":device["device_id"],"last_seen":seen}
 
 @app.get("/v1/devices")
 def list_devices(operator: dict[str,str] = Depends(require_operator)):
-    with _connect() as c:
+    with _db() as c:
         rows=c.execute("""SELECT d.device_id,d.tenant_id,d.name,d.created_at,d.revoked_at,COUNT(e.id) event_count,
             MAX(COALESCE(d.last_seen,e.received_at)) last_seen FROM devices d
             LEFT JOIN endpoint_events e ON e.device_id=d.device_id
@@ -246,7 +246,7 @@ def list_devices(operator: dict[str,str] = Depends(require_operator)):
 
 @app.get("/v1/overview")
 def fleet_overview(operator: dict[str,str] = Depends(require_operator)):
-    with _connect() as c:
+    with _db() as c:
         totals=c.execute("SELECT COUNT(*) devices,SUM(CASE WHEN revoked_at IS NULL THEN 1 ELSE 0 END) active_devices FROM devices WHERE tenant_id=?",(operator["tenant_id"],)).fetchone()
         events=c.execute("SELECT COUNT(*) total_events,MAX(received_at) last_event FROM endpoint_events WHERE tenant_id=?",(operator["tenant_id"],)).fetchone()
     return {"devices":int(totals["devices"] or 0),"active_devices":int(totals["active_devices"] or 0),
@@ -255,13 +255,13 @@ def fleet_overview(operator: dict[str,str] = Depends(require_operator)):
 
 @app.get("/v1/audit")
 def audit_log(operator: dict[str,str] = Depends(require_admin)):
-    with _connect() as c:
+    with _db() as c:
         rows=c.execute("SELECT actor_id,action,target_id,created_at FROM audit_log WHERE tenant_id=? ORDER BY id DESC LIMIT 500",(operator["tenant_id"],)).fetchall()
     return {"entries":[dict(r) for r in rows]}
 
 @app.delete("/v1/devices/{device_id}")
 def revoke_device(device_id: str, operator: dict[str,str] = Depends(require_admin)):
-    with _connect() as c:
+    with _db() as c:
         cur=c.execute("UPDATE devices SET revoked_at=? WHERE device_id=? AND tenant_id=? AND revoked_at IS NULL",
                       (_now(),device_id,operator["tenant_id"]))
         if cur.rowcount==0: raise HTTPException(status_code=404,detail="Active device not found.")
@@ -293,7 +293,7 @@ def ingest_events(batch: EventBatch, device: dict[str,str] = Depends(require_dev
         rows.append((received,batch.schema_version,pd.Timestamp(event["timestamp"]).isoformat(),str(event["src_ip"]),str(event["dst_ip"]),
             int(event["src_port"]),int(event["dst_port"]),str(event["protocol"]),float(event["duration"]),status,pid,process,
             device["device_id"],device["tenant_id"]))
-    with _connect() as c:
+    with _db() as c:
         c.executemany("""INSERT INTO endpoint_events(received_at,schema_version,timestamp,src_ip,dst_ip,src_port,dst_port,
             protocol,duration,status,pid,process,device_id,tenant_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",rows)
         c.execute("UPDATE devices SET last_seen=? WHERE device_id=?",(received,device["device_id"]))

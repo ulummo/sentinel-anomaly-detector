@@ -217,6 +217,29 @@ def create_operator(request: OperatorCreate, owner: dict[str,str] = Depends(requ
         except sqlite3.IntegrityError: raise HTTPException(status_code=409,detail="Operator email already exists in this organization.")
     return {"operator_id":operator_id,"email":email,"tenant_id":owner["tenant_id"],"role":request.role}
 
+@app.get("/v1/operators")
+def list_operators(owner: dict[str,str] = Depends(require_owner)):
+    with _db() as c:
+        rows=c.execute("""SELECT operator_id,tenant_id,email,role,created_at,disabled_at
+            FROM operators WHERE tenant_id=? ORDER BY created_at""",(owner["tenant_id"],)).fetchall()
+    return {"operators":[dict(row) for row in rows]}
+
+@app.delete("/v1/operators/{operator_id}")
+def disable_operator(operator_id: str, owner: dict[str,str] = Depends(require_owner)):
+    if operator_id == owner["operator_id"]:
+        raise HTTPException(status_code=409,detail="The current owner cannot disable their own account.")
+    with _db() as c:
+        row=c.execute("SELECT operator_id FROM operators WHERE operator_id=? AND tenant_id=? AND disabled_at IS NULL",
+                      (operator_id,owner["tenant_id"])).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404,detail="Active operator not found.")
+        c.execute("UPDATE operators SET disabled_at=? WHERE operator_id=? AND tenant_id=?",
+                  (_now(),operator_id,owner["tenant_id"]))
+        c.execute("UPDATE operator_sessions SET revoked_at=? WHERE operator_id=? AND revoked_at IS NULL",
+                  (_now(),operator_id))
+        _audit(c,owner,"operator.disabled",operator_id)
+    return {"operator_id":operator_id,"status":"disabled"}
+
 @app.get("/v1/me")
 def me(operator: dict[str,str] = Depends(require_operator)): return operator
 

@@ -98,10 +98,11 @@ The sensor sends authenticated heartbeat messages and event batches. Revoking a 
 ## Security and deployment notes
 
 - `SENTINEL_BOOTSTRAP_TOKEN` is a one-time setup secret, not an everyday administrator password. Keep it private and unset it after bootstrap.
-- Operator sessions expire after 12 hours. Passwords use PBKDF2-HMAC-SHA256 with per-password random salts.
+- Operator sessions expire after 12 hours. Passwords use PBKDF2-HMAC-SHA256 with per-password random salts. Login attempts are throttled per account and client IP (8 failures in a 15-minute window trigger a 15-minute lockout).
 - Device credentials are random, returned once, and stored as SHA-256 hashes.
 - Events and device records are bound server-side to the authenticated device and tenant.
-- This is still an early MVP, not a production-ready multi-tenant service. Before customer deployment add rate limits, request-size limits, account recovery/MFA, session/device session management, robust audit retention, managed secrets, TLS termination, backups, monitoring, migration/rollback procedures and independent security review.
+- The API rejects requests declaring a body larger than 1 MiB. Login throttling is a basic SQLite-backed safeguard, not a substitute for edge/WAF rate limiting. Deploy behind a reverse proxy that also enforces body-size, connection, and rate limits.
+- This is still an early MVP, not a production-ready multi-tenant service. Before customer deployment add account recovery/MFA, operator disable/password-reset workflows, robust audit retention, managed secrets, TLS termination, backups, monitoring, migration/rollback procedures and independent security review.
 - Keep the development API bound to loopback. For remote use, deploy behind a correctly configured HTTPS reverse proxy; do not expose the development server directly to the public internet.
 - The sensor sees only TCP sockets visible to its own Windows host. Network-wide monitoring requires an approved network sensor or supported router/firewall/switch telemetry.
 - Monitor only systems you own or are authorized to administer.

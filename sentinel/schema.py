@@ -40,6 +40,11 @@ def validate_endpoint_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str
             "Missing required endpoint columns: " + ", ".join(missing)
         ]
 
+    # pandas 3 may infer Arrow-backed string columns; normalize into object
+    # columns so parsed timestamps and integer ports can be assigned safely.
+    for column in REQUIRED_ENDPOINT_COLUMNS:
+        data[column] = data[column].astype("object")
+
     valid_indices: list[int] = []
     errors: list[str] = []
 

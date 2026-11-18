@@ -56,7 +56,7 @@ $enrollment = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/devi
 $enrollment
 ```
 
-The response contains `device_id` and `device_token`. The plaintext device token is shown only at enrollment time. Store it securely; do not commit it to source control or share it in support tickets.
+The response contains `device_id` and `device_token`. The plaintext device token is shown only at enrollment time. Store it securely; do not commit it to source control or share it in support tickets. The sensor also sends an authenticated heartbeat on every collection cycle, so the fleet inventory can show that a workstation is alive even when it has no outbound TCP connections to report.
 
 ### 3. Run the sensor with its device credential
 

@@ -105,7 +105,7 @@ def ingest_events(batch: EventBatch) -> dict[str, Any]:
             str(event.get("process", "")) or None,
         ))
 
-    placeholders = ",".join(["?"] * 13)
+    placeholders = ",".join(["?"] * 12)
     with _connect() as connection:
         connection.executemany(
             f"""INSERT INTO endpoint_events

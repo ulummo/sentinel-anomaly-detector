@@ -96,3 +96,29 @@ def test_invalid_optional_pid_is_rejected(client):
     response = client.post("/v1/events", headers={"Authorization": f"Bearer {device['device_token']}"},
                            json={"events": [event]})
     assert response.status_code == 422
+
+
+
+def test_admin_can_view_device_inventory_and_last_seen(client):
+    device = create_device(client, tenant="north")
+    response = client.get("/v1/devices", headers={"Authorization": f"Bearer {ADMIN}"})
+    assert response.status_code == 200
+    assert response.json()["devices"][0]["device_id"] == device["device_id"]
+    assert response.json()["devices"][0]["event_count"] == 0
+    assert response.json()["devices"][0]["last_seen"] is None
+
+
+def test_fleet_overview_counts_devices_and_events(client):
+    device = create_device(client, tenant="north")
+    client.post("/v1/events", headers={"Authorization": f"Bearer {device['device_token']}"},
+                json={"schema_version": "1.0", "events": [valid_event()]})
+    response = client.get("/v1/overview", headers={"Authorization": f"Bearer {ADMIN}"})
+    assert response.status_code == 200
+    assert response.json()["devices"] == 1
+    assert response.json()["active_devices"] == 1
+    assert response.json()["total_events"] == 1
+
+
+def test_device_inventory_requires_admin(client):
+    response = client.get("/v1/devices")
+    assert response.status_code == 401

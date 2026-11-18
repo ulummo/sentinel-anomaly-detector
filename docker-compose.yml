@@ -5,6 +5,7 @@ services:
     environment:
       SENTINEL_DB_PATH: /data/sentinel_events.sqlite3
       SENTINEL_BOOTSTRAP_TOKEN: ${SENTINEL_BOOTSTRAP_TOKEN:?Set a strong bootstrap secret in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
     volumes:
       - sentinel_data:/data
     expose:

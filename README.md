@@ -46,9 +46,10 @@ The development server binds to loopback. Do not expose it directly to the publi
 
 ### 2. Enroll a device
 
-In another PowerShell window, use the admin token to provision a device:
+In another PowerShell window, set the same admin token in that window too, then provision a device:
 
 ```powershell
+$env:SENTINEL_ADMIN_TOKEN = "paste-the-same-long-random-admin-secret-here"
 $admin = $env:SENTINEL_ADMIN_TOKEN
 $body = @{ tenant_id = "acme"; name = "Office-PC-01" } | ConvertTo-Json
 $enrollment = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/devices" -Headers @{ Authorization = "Bearer $admin" } -ContentType "application/json" -Body $body

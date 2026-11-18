@@ -1,8 +1,62 @@
-# Sentinel — Network Anomaly Watchtower
+# SENTINEL — Network Anomaly Detection & Endpoint Visibility
 
-Sentinel is an early-stage network anomaly monitoring project for small and medium-sized businesses. It combines a Streamlit dashboard, an experimental Windows endpoint sensor and a central ingestion API.
+<p align="center">
+  <strong>Observe. Analyze. Investigate.</strong><br>
+  A Python-based prototype for Windows endpoint connection visibility and explainable security investigations.
+</p>
 
-> Anomaly scores are investigation signals, not proof of malicious activity. Sentinel is not an antivirus or EDR replacement.
+Sentinel is an experimental network-monitoring and anomaly-analysis platform. It combines a **Windows endpoint sensor**, a **Streamlit security dashboard**, an **Isolation Forest detection pipeline**, and an optional **central API** for device enrollment and event ingestion.
+
+The project is designed as an educational and research-oriented security prototype: collect connection metadata, validate it, identify statistically unusual observations, and give an analyst a place to investigate them.
+
+> **Important:** an anomaly is not proof of an attack. Scores and flags are statistical investigation signals, not malware verdicts. Sentinel is not an antivirus, firewall, packet-inspection system, or EDR replacement.
+
+## What Sentinel currently provides
+
+- **Windows endpoint visibility** — observes TCP socket metadata available to the local Windows host, including local/remote addresses, ports, process name, PID, connection state, and observation time.
+- **Anomaly analysis** — applies an Isolation Forest model to prepared numeric and categorical features.
+- **Investigation dashboard** — presents activity timelines, review counts, destination/process context, filters, and downloadable results.
+- **Input validation** — validates endpoint CSV records against a versioned schema and reports invalid rows.
+- **Optional central ingestion** — supports organization-scoped operators, per-device credentials, endpoint heartbeats, event ingestion, and audit records.
+- **Automated tests** — includes tests for API behavior, authentication, schema validation, sensor behavior, backups, and detection.
+
+## System overview
+
+```text
+Windows endpoint
+  └─ Sentinel Sensor (psutil)
+       ├─ Local CSV observations
+       └─ Optional HTTPS event upload
+                │
+                ▼
+       Sentinel Central API
+       ├─ Operator authentication
+       ├─ Device credentials
+       ├─ Tenant-scoped inventory
+       └─ Audit records
+
+CSV / API data ──► validation & feature preparation
+                         │
+                         ▼
+                  Isolation Forest
+                         │
+                         ▼
+                 Streamlit dashboard
+                  review & investigation
+```
+
+## Project status
+
+**Current stage: functional prototype / early MVP.** The local dashboard and Windows sensor are implemented, and the repository includes a central API and authentication workflows. Detection quality, endpoint coverage, deployment hardening, and operational reliability remain active development areas.
+
+### Scope and limitations
+
+- The current sensor monitors **one Windows computer at a time**. It does not monitor an entire LAN.
+- It collects socket metadata, not packet payloads or packet-level content.
+- The sensor does not currently provide reliable per-flow byte or packet counters.
+- Repeated samples may represent the same long-lived socket observed at different times; they should not automatically be interpreted as independent connections.
+- The anomaly model is unsupervised and dataset-relative. A high score does not establish malicious intent, and a low score does not guarantee safety.
+- The project has not been independently security-audited and is not presented as production-ready.
 
 ## Quick start
 

@@ -24,8 +24,8 @@ section[data-testid="stSidebar"]{background:#0a1320;border-right:1px solid #2031
 
 def api_request(base_url,token,method,path,payload=None):
     parsed=urlparse(base_url)
-    if parsed.scheme!="https" and not(parsed.scheme=="http" and parsed.hostname in {"localhost","127.0.0.1","::1"}):
-        raise ValueError("Удалённый сервер должен использовать HTTPS.")
+    if parsed.scheme!="https" and not(parsed.scheme=="http" and parsed.hostname in {"localhost","127.0.0.1","::1","api"}):
+        raise ValueError("Удалённый сервер должен использовать HTTPS. HTTP разрешён только для loopback и внутреннего Docker-сервиса api.")
     if not parsed.netloc: raise ValueError("Укажите корректный API URL.")
     data=json.dumps(payload).encode() if payload is not None else None
     headers={"Content-Type":"application/json"}

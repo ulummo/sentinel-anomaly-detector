@@ -132,10 +132,10 @@ def test_device_heartbeat_updates_last_seen(client):
     assert client.get("/v1/devices",headers=login(client)).json()["devices"][0]["last_seen"]==r.json()["last_seen"]
 
 
-def test_login_is_rate_limited_and_success_clears_failures(client):
-    for _ in range(7):
+def test_login_is_rate_limited_after_eight_failed_attempts(client):
+    for attempt in range(8):
         response=client.post("/v1/auth/login",json={"email":"owner@acme.test","password":"wrong-password"})
-        assert response.status_code==401
+        assert response.status_code==(429 if attempt==7 else 401)
     blocked=client.post("/v1/auth/login",json={"email":"owner@acme.test","password":"correct-horse-battery"})
     assert blocked.status_code==429
 

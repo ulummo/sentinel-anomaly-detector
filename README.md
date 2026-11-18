@@ -77,3 +77,28 @@ The sensor records observations for five minutes by default. Use `--seconds 0` t
 **Important scope limitation:** on a typical home Wi-Fi network, a computer cannot passively see all other devices' unicast traffic. Network-wide monitoring requires a supported router/firewall export, a managed switch with port mirroring, or a sensor deployed on each device. This endpoint sensor is a safe first step and must not be described as whole-LAN visibility. This sensor enumerates sockets rather than capturing packets, so it does not provide per-flow byte or packet counters.
 
 Only monitor devices and networks you own or are authorized to administer.
+
+## Central ingestion API (MVP)
+
+The first server-side ingestion component accepts validated endpoint observations and stores them in a local SQLite database. It currently uses one shared bearer token; per-device enrollment and revocation are planned next. Do not expose this development API directly to the public internet.
+
+Install dependencies:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Set a long random token and start the API on the local machine:
+
+```powershell
+$env:SENTINEL_INGEST_TOKEN = "replace-with-a-random-secret-at-least-32-characters"
+uvicorn sentinel.api:app --host 127.0.0.1 --port 8000
+```
+
+Health check: `http://127.0.0.1:8000/health`
+
+Authenticated ingestion endpoint: `POST http://127.0.0.1:8000/v1/events`
+
+Request body uses schema version `1.0` and an `events` array containing the endpoint fields documented in [the event schema](docs/ENDPOINT_EVENT_SCHEMA_V1.md). Supply the token as an HTTP header: `Authorization: Bearer <token>`.
+
+The API currently stores accepted observations in `sentinel_events.sqlite3` (override with `SENTINEL_DB_PATH`). The existing Windows sensor still writes CSV; sending events directly from the sensor is a follow-up integration task.

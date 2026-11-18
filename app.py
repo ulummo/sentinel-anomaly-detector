@@ -8,6 +8,7 @@ import streamlit as st
 
 from sentinel.data import generate_demo_data, prepare_flows
 from sentinel.detector import score_flows
+from sentinel.schema import REQUIRED_ENDPOINT_COLUMNS, validate_endpoint_frame
 
 st.set_page_config(
     page_title="Sentinel | Security Operations",
@@ -45,6 +46,26 @@ small, .stCaption { color:#8ea1b8 !important; }
 """, unsafe_allow_html=True)
 
 SENSOR_FILE = Path("sentinel_endpoint_flows.csv")
+
+def validate_sensor_source(frame: pd.DataFrame, label: str) -> pd.DataFrame:
+    """Validate endpoint sensor CSVs and show actionable row-level feedback."""
+    columns = {str(c).strip().lower() for c in frame.columns}
+    if not set(REQUIRED_ENDPOINT_COLUMNS).issubset(columns):
+        st.error(f"{label} does not match endpoint schema v1. Required: {', '.join(REQUIRED_ENDPOINT_COLUMNS)}")
+        st.stop()
+    valid, errors = validate_endpoint_frame(frame)
+    if errors:
+        st.warning(f"Validation found {len(errors)} issue(s). Invalid rows are excluded.")
+        with st.expander("View validation details", expanded=True):
+            for message in errors[:30]:
+                st.write(f"• {message}")
+            if len(errors) > 30:
+                st.caption(f"{len(errors) - 30} additional issues not shown.")
+    if valid.empty:
+        st.error("No valid endpoint observations remain after validation.")
+        st.stop()
+    return valid
+
 
 def enrich_endpoint_data(frame: pd.DataFrame) -> pd.DataFrame:
     """Add frequency signals to endpoint socket metadata without inventing traffic volume."""
@@ -93,16 +114,21 @@ try:
         if not SENSOR_FILE.exists():
             st.warning("The sensor CSV was not found beside app.py. Start the sensor or choose another data source.")
             st.stop()
-        raw = pd.read_csv(SENSOR_FILE)
-        source_label = "LIVE SENSOR FILE"
+        raw = validate_sensor_source(pd.read_csv(SENSOR_FILE), "Local sensor CSV")
+        source_label = "LOCAL WINDOWS SENSOR · VALIDATED"
         raw = enrich_endpoint_data(raw)
     elif source == "Upload CSV":
         if uploaded is None:
             st.info("Upload a Sentinel CSV file to begin analysis.")
             st.stop()
         raw = pd.read_csv(uploaded)
-        source_label = "UPLOADED DATASET"
-        raw = enrich_endpoint_data(raw)
+        columns = {str(c).strip().lower() for c in raw.columns}
+        if set(REQUIRED_ENDPOINT_COLUMNS).issubset(columns):
+            raw = validate_sensor_source(raw, "Uploaded endpoint CSV")
+            source_label = "ENDPOINT CSV · VALIDATED"
+            raw = enrich_endpoint_data(raw)
+        else:
+            source_label = "UPLOADED DATASET"
     else:
         raw = generate_demo_data()
         source_label = "DEMO ENVIRONMENT"

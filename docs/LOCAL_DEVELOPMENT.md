@@ -52,7 +52,7 @@ In another terminal with the virtual environment activated:
 python -m pytest -q
 ```
 
-## Data and security boundaries
+## 6. Back up the local API database\n\nWhen the local API has created `sentinel_events.sqlite3`, make a consistent SQLite backup with:\n\n```powershell\npython scripts/backup_local.py --database sentinel_events.sqlite3 --output-dir backups --retention-days 14\n```\n\nThe script uses SQLite's online backup API, runs an integrity check, and retains the most recent 14 days of backups by default. Keep a second copy somewhere separate if the data matters.\n\n## Data and security boundaries
 
 - The dashboard's demo mode uses generated sample data.
 - The Windows sensor observes TCP socket metadata on the computer where it runs; it is not whole-network monitoring.

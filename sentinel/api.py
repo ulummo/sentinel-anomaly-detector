@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from sentinel.schema import ENDPOINT_SCHEMA_VERSION, validate_endpoint_frame
 
 DATABASE_PATH = Path(os.getenv("SENTINEL_DB_PATH", "sentinel_events.sqlite3"))
-app = FastAPI(title="Sentinel Ingestion API", version="0.1.0")
+app = FastAPI(title="Sentinel Ingestion API", version="0.1.1")
 
 
 class EventBatch(BaseModel):
@@ -46,6 +46,7 @@ def require_token(authorization: str | None = Header(default=None)) -> None:
 
 
 def _connect() -> sqlite3.Connection:
+    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH)
     connection.execute(
         """
@@ -87,22 +88,45 @@ def ingest_events(batch: EventBatch) -> dict[str, Any]:
     if errors or len(valid) != len(frame):
         raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
+    # Optional metadata is untrusted input too: reject malformed PIDs and
+    # oversized strings before they reach persistence.
+    normalized_optional: list[tuple[int | None, str | None, str | None]] = []
+    for index, event in valid.iterrows():
+        raw_pid = event.get("pid")
+        pid: int | None = None
+        if pd.notna(raw_pid) and str(raw_pid).strip():
+            try:
+                numeric_pid = float(raw_pid)
+                if not numeric_pid.is_integer() or numeric_pid < 0:
+                    raise ValueError
+                pid = int(numeric_pid)
+            except (TypeError, ValueError, OverflowError):
+                raise HTTPException(
+                    status_code=422,
+                    detail={"validation_errors": [f"Row {index}: pid must be a non-negative integer."]},
+                )
+
+        raw_status = event.get("status")
+        raw_process = event.get("process")
+        status = str(raw_status).strip() if pd.notna(raw_status) else ""
+        process = str(raw_process).strip() if pd.notna(raw_process) else ""
+        if len(status) > 128 or len(process) > 256:
+            raise HTTPException(
+                status_code=422,
+                detail={"validation_errors": [f"Row {index}: status exceeds 128 or process exceeds 256 characters."]},
+            )
+        normalized_optional.append((pid, status or None, process or None))
+
     received_at = datetime.now(timezone.utc).isoformat()
-    columns = [
-        "timestamp", "src_ip", "dst_ip", "src_port", "dst_port",
-        "protocol", "duration", "status", "pid", "process",
-    ]
     rows = []
-    for _, event in valid.iterrows():
+    for (_, event), (pid, status, process) in zip(valid.iterrows(), normalized_optional):
         timestamp = pd.Timestamp(event["timestamp"]).isoformat()
         rows.append((
             received_at, batch.schema_version, timestamp,
             str(event["src_ip"]), str(event["dst_ip"]),
             int(event["src_port"]), int(event["dst_port"]),
             str(event["protocol"]), float(event["duration"]),
-            str(event.get("status", "")) or None,
-            int(event["pid"]) if pd.notna(event.get("pid")) and str(event.get("pid")).strip() else None,
-            str(event.get("process", "")) or None,
+            status, pid, process,
         ))
 
     placeholders = ",".join(["?"] * 12)

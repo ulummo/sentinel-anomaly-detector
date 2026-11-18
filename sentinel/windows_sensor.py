@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import socket
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import psutil
 
@@ -20,14 +24,55 @@ FIELDS = [
     "timestamp", "src_ip", "dst_ip", "src_port", "dst_port",
     "protocol", "duration", "status", "pid", "process",
 ]
+MAX_BATCH_SIZE = 500
 
 
-def collect(output: Path, interval: float, seconds: int) -> None:
+def validate_server_url(server_url: str) -> str:
+    """Require HTTPS except for loopback development servers."""
+    parsed = urlparse(server_url)
+    if parsed.scheme != "https" and not (
+        parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    ):
+        raise ValueError("Server URL must use HTTPS (HTTP is allowed only for localhost).")
+    if not parsed.netloc:
+        raise ValueError("Server URL must include a host.")
+    return server_url.rstrip("/") + "/v1/events"
+
+
+def send_batch(endpoint: str, token: str, events: list[dict]) -> None:
+    """Send observations in bounded batches; never print or persist the token."""
+    for offset in range(0, len(events), MAX_BATCH_SIZE):
+        payload = json.dumps({
+            "schema_version": "1.0",
+            "events": events[offset:offset + MAX_BATCH_SIZE],
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            endpoint,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                print(f"Central API accepted {result.get('accepted', 0)} observation(s).")
+        except urllib.error.HTTPError as exc:
+            print(f"Central API rejected batch (HTTP {exc.code}); local CSV is retained.")
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            print(f"Central API unavailable ({exc}); local CSV is retained.")
+
+
+def collect(output: Path, interval: float, seconds: int,
+            server_url: str | None = None, token: str | None = None) -> None:
     started = time.monotonic()
     first_seen: dict[tuple, float] = {}
     known: set[tuple] = set()
     new_file = not output.exists() or output.stat().st_size == 0
     output.parent.mkdir(parents=True, exist_ok=True)
+    endpoint = validate_server_url(server_url) if server_url else None
 
     with output.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
@@ -36,6 +81,8 @@ def collect(output: Path, interval: float, seconds: int) -> None:
 
         print(f"Sentinel Sensor running. Writing connection metadata to: {output}")
         print("Only this Windows computer is monitored; no packet payloads are collected.")
+        if endpoint:
+            print(f"Central ingestion enabled: {server_url}")
         try:
             while seconds <= 0 or time.monotonic() - started < seconds:
                 now = time.monotonic()
@@ -46,6 +93,7 @@ def collect(output: Path, interval: float, seconds: int) -> None:
                     time.sleep(interval)
                     continue
 
+                observations: list[dict] = []
                 for conn in connections:
                     if not conn.laddr or not conn.raddr:
                         continue
@@ -60,7 +108,7 @@ def collect(output: Path, interval: float, seconds: int) -> None:
                         process = psutil.Process(conn.pid).name() if conn.pid else ""
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         process = ""
-                    writer.writerow({
+                    observation = {
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "src_ip": local_ip,
                         "dst_ip": remote_ip,
@@ -71,8 +119,14 @@ def collect(output: Path, interval: float, seconds: int) -> None:
                         "status": conn.status or "",
                         "pid": conn.pid or "",
                         "process": process,
-                    })
+                    }
+                    writer.writerow(observation)
+                    observations.append(observation)
                 handle.flush()
+
+                if endpoint and observations:
+                    send_batch(endpoint, token or "", observations)
+
                 print(f"Observed {len(known)} unique TCP connections so far.")
                 time.sleep(interval)
         except KeyboardInterrupt:
@@ -86,12 +140,24 @@ def main() -> None:
     parser.add_argument("--interval", type=float, default=10.0)
     parser.add_argument("--seconds", type=int, default=300,
                         help="Collection duration; 0 runs until Ctrl+C (default: 300)")
+    parser.add_argument("--server-url", default=None,
+                        help="Optional Sentinel API base URL (HTTPS required except localhost)")
     args = parser.parse_args()
     if args.interval < 1:
         parser.error("--interval must be at least 1 second")
     if args.seconds < 0:
         parser.error("--seconds cannot be negative")
-    collect(Path(args.output), args.interval, args.seconds)
+
+    token = os.getenv("SENTINEL_INGEST_TOKEN")
+    if args.server_url and (not token or len(token) < 32):
+        parser.error("Set SENTINEL_INGEST_TOKEN to a secret of at least 32 characters.")
+    try:
+        if args.server_url:
+            validate_server_url(args.server_url)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    collect(Path(args.output), args.interval, args.seconds, args.server_url, token)
 
 
 if __name__ == "__main__":

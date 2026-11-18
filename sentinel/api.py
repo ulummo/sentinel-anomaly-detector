@@ -124,6 +124,43 @@ def create_device(request: DeviceCreate) -> dict[str, str]:
     return {"device_id": device_id, "tenant_id": request.tenant_id, "name": request.name.strip(), "device_token": token}
 
 
+@app.get("/v1/devices", dependencies=[Depends(require_admin)])
+def list_devices() -> dict[str, Any]:
+    """List registered devices and their latest server-received event time."""
+    with _connect() as connection:
+        rows = connection.execute("""
+            SELECT d.device_id, d.tenant_id, d.name, d.created_at, d.revoked_at,
+                   COUNT(e.id) AS event_count, MAX(e.received_at) AS last_seen
+            FROM devices AS d
+            LEFT JOIN endpoint_events AS e ON e.device_id = d.device_id
+            GROUP BY d.device_id
+            ORDER BY d.created_at DESC
+        """).fetchall()
+    return {"devices": [dict(row) for row in rows]}
+
+
+@app.get("/v1/overview", dependencies=[Depends(require_admin)])
+def fleet_overview() -> dict[str, Any]:
+    """Return fleet-wide counters without exposing event payloads."""
+    with _connect() as connection:
+        totals = connection.execute("""
+            SELECT COUNT(*) AS devices,
+                   SUM(CASE WHEN revoked_at IS NULL THEN 1 ELSE 0 END) AS active_devices
+            FROM devices
+        """).fetchone()
+        events = connection.execute("""
+            SELECT COUNT(*) AS total_events, MAX(received_at) AS last_event
+            FROM endpoint_events
+        """).fetchone()
+    return {
+        "devices": int(totals["devices"] or 0),
+        "active_devices": int(totals["active_devices"] or 0),
+        "revoked_devices": int((totals["devices"] or 0) - (totals["active_devices"] or 0)),
+        "total_events": int(events["total_events"] or 0),
+        "last_event": events["last_event"],
+    }
+
+
 @app.delete("/v1/devices/{device_id}", dependencies=[Depends(require_admin)])
 def revoke_device(device_id: str) -> dict[str, str]:
     with _connect() as connection:
